@@ -945,9 +945,18 @@ def handle_tool_call_updates(
             handle_user_input_update(agent, tool=_t)
             _t.requires_user_input = False
             _t.answered = True
-            # Consume the generator without yielding
-            deque(run_tool(agent, run_response, run_messages, _t, functions=_functions), maxlen=0)
-            _maybe_create_audit_approval(agent, _t, run_response, "approved")
+            # A user-input tool under @approval(type="required") carries a
+            # confirmed flag. An explicitly rejected approval must not execute;
+            # mirror Case 1 and route it through reject_tool_call.
+            if _t.confirmed is not False:
+                # Consume the generator without yielding
+                deque(run_tool(agent, run_response, run_messages, _t, functions=_functions), maxlen=0)
+                _maybe_create_audit_approval(agent, _t, run_response, "approved")
+            else:
+                reject_tool_call(agent, run_messages, _t, functions=_functions)
+                _t.confirmation_note = _t.confirmation_note or "Tool call was rejected"
+                _t.tool_call_error = True
+                _maybe_create_audit_approval(agent, _t, run_response, "rejected")
 
 
 def handle_tool_call_updates_stream(
@@ -996,12 +1005,18 @@ def handle_tool_call_updates_stream(
         # Case 4: Handle user input required tools
         elif _t.requires_user_input is not None and _t.requires_user_input is True:
             handle_user_input_update(agent, tool=_t)
-            yield from run_tool(
-                agent, run_response, run_messages, _t, functions=_functions, stream_events=stream_events
-            )
+            if _t.confirmed is not False:
+                yield from run_tool(
+                    agent, run_response, run_messages, _t, functions=_functions, stream_events=stream_events
+                )
+                _maybe_create_audit_approval(agent, _t, run_response, "approved")
+            else:
+                reject_tool_call(agent, run_messages, _t, functions=_functions)
+                _t.confirmation_note = _t.confirmation_note or "Tool call was rejected"
+                _t.tool_call_error = True
+                _maybe_create_audit_approval(agent, _t, run_response, "rejected")
             _t.requires_user_input = False
             _t.answered = True
-            _maybe_create_audit_approval(agent, _t, run_response, "approved")
 
 
 async def ahandle_tool_call_updates(
@@ -1044,11 +1059,17 @@ async def ahandle_tool_call_updates(
         # Case 4: Handle user input required tools
         elif _t.requires_user_input is not None and _t.requires_user_input is True:
             handle_user_input_update(agent, tool=_t)
-            async for _ in arun_tool(agent, run_response, run_messages, _t, functions=_functions):
-                pass
+            if _t.confirmed is not False:
+                async for _ in arun_tool(agent, run_response, run_messages, _t, functions=_functions):
+                    pass
+                await _amaybe_create_audit_approval(agent, _t, run_response, "approved")
+            else:
+                reject_tool_call(agent, run_messages, _t, functions=_functions)
+                _t.confirmation_note = _t.confirmation_note or "Tool call was rejected"
+                _t.tool_call_error = True
+                await _amaybe_create_audit_approval(agent, _t, run_response, "rejected")
             _t.requires_user_input = False
             _t.answered = True
-            await _amaybe_create_audit_approval(agent, _t, run_response, "approved")
 
 
 async def ahandle_tool_call_updates_stream(
@@ -1097,10 +1118,16 @@ async def ahandle_tool_call_updates_stream(
         # Case 4: Handle user input required tools
         elif _t.requires_user_input is not None and _t.requires_user_input is True:
             handle_user_input_update(agent, tool=_t)
-            async for event in arun_tool(
-                agent, run_response, run_messages, _t, functions=_functions, stream_events=stream_events
-            ):
-                yield event
+            if _t.confirmed is not False:
+                async for event in arun_tool(
+                    agent, run_response, run_messages, _t, functions=_functions, stream_events=stream_events
+                ):
+                    yield event
+                await _amaybe_create_audit_approval(agent, _t, run_response, "approved")
+            else:
+                reject_tool_call(agent, run_messages, _t, functions=_functions)
+                _t.confirmation_note = _t.confirmation_note or "Tool call was rejected"
+                _t.tool_call_error = True
+                await _amaybe_create_audit_approval(agent, _t, run_response, "rejected")
             _t.requires_user_input = False
             _t.answered = True
-            await _amaybe_create_audit_approval(agent, _t, run_response, "approved")
